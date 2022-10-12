@@ -13,13 +13,10 @@ from OpenGL.arrays import vbo
 
 
 ######################################################333
-bvh_file = None
 renderer = None
 ############################################################
 def test_pytest():
     assert 3 == 4
-
-
 
 ############################################################
     
@@ -47,7 +44,6 @@ class Skeleton:
     
 class Motion:
     def __init__(self):
-        # TODO
         self.skeleton = Skeleton()
         self.postures = []
 
@@ -90,12 +86,19 @@ class BvhFile:
             print("Drag and drop only .bvh file")
             return False
         f = open(self.name, 'r')
+        lines = f.readlines()
+        lines = [line.rstrip() for line in lines]
+        line_num = 0
+        f.close()
+        
         isEndEffector = False
         
         cur_joint = Joint()
         while True:
-            line = f.readline()
-            if not line: break
+            if line_num == len(lines): break
+            line = lines[line_num]
+            line_num += 1
+            
             words = line.split()
             if len(words)==0: continue
 
@@ -104,7 +107,9 @@ class BvhFile:
             elif (words[0] == 'Frame' and words[1] == 'Time:'):
                 self.frame_time = float(words[2])
                 for i in range(0, self.frame_num):
-                    line = f.readline()
+                    line = lines[line_num]
+                    line_num += 1
+                    
                     self.motion.push_posture(line)
             elif (words[0] == 'JOINT' or words[0] == 'ROOT'):
                 self.joint_num += 1
@@ -126,14 +131,14 @@ class BvhFile:
                     self.motion.push_joint(cur_joint)
                     continue
                 # If it is not end effector
-                line = f.readline()
+                line = lines[line_num]
+                line_num += 1
                 words = line.split()
                 if (words[0] != 'CHANNELS'):
                     print("ERROR: OFFSET 다음에 무조건 CHANNELS 나오는 것으로 생각하고 구현하였는데 예외상황 발생")
                     return
                 
                 cur_joint.channel_num = int(words[1])
-                Tx = Ty =  Tz = Rz = Rx = Ry = 0.
                 channels = []
                 for i in range(0, cur_joint.channel_num):
                     chan_type = words[2+i].upper()
@@ -142,16 +147,18 @@ class BvhFile:
 
                 self.motion.push_joint(cur_joint)
 
+        return True
+
+    def print_info(self):
         print("File name : ", self.name.split('\\')[-1])
         print("Number of frames : ", self.frame_num)
         print("FPS (1/FrameTime) : ", 1/self.frame_time)
         print("Number of joints : ", self.joint_num)
         print("List of all joint names : ", self.joint_list)
 
-        return True
-
 class Renderer:
-    def __init__ (self):
+    def __init__ (self, bvh_file):
+        self.bvh_file = bvh_file
         self.cur_frame = 0
         self.animating_mode = False
         self.current_posture = Posture("")
@@ -169,6 +176,26 @@ class Renderer:
         self.cur_xpos = 0
         self.cur_ypos = 0
         self.zooming = 0
+        self.aspect = 1.0
+        self.viewport_w = 800
+        self.viewport_h = 800
+
+    def set_viewport_size(self, width, height):
+        self.viewport_w = width
+        self.viewport_h = height
+        self.aspect = float(width / height)
+
+    def get_bvh(self):
+        return self.bvh_file
+
+    def set_bvh(self, bvh_file):
+        self.bvh_file = bvh_file
+        self.cur_frame = 0
+
+    def show_next_frame(self):
+        if self.animating_mode:
+            self.cur_frame += 1
+            if self.cur_frame >= self.bvh_file.frame_num: self.cur_frame = 0
 
     def start_or_stop_animation(self):
         self.animating_mode = not self.animating_mode
@@ -196,7 +223,7 @@ class Renderer:
         glBegin(GL_LINES)
         glColor3ub(211, 211, 211) # light gray
         line = 15
-        for i in range(-line, 15):
+        for i in range(-line, line):
             glVertex3fv(np.array([i, 0, -line]))
             glVertex3fv(np.array([i, 0, line]))
             glVertex3fv(np.array([-line, 0, i]))
@@ -241,24 +268,21 @@ class Renderer:
         glPopMatrix()
         
     def renderBvh(self):
-        global bvh_file
-        self.current_posture = bvh_file.get_posture(self.cur_frame)
-        if self.animating_mode:
-            self.cur_frame += 1
-            if self.cur_frame >= bvh_file.frame_num: self.cur_frame = 0
+        self.current_posture = self.bvh_file.get_posture(self.cur_frame)
+        
         self.posture_idx = 0
-        root = bvh_file.get_root()
+        root = self.bvh_file.get_root()
         self.drawFrameRecursively(root)
 
     def init(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glEnable(GL_DEPTH_TEST)
         glPolygonMode( GL_FRONT_AND_BACK, GL_FILL ) 
-
         glLoadIdentity()
-        
+
+        glViewport(0, 0, self.viewport_w, self.viewport_h)
         if self.projection_type:
-            gluPerspective(45, 1, 3, 1000)
+            gluPerspective(45, self.aspect, 2, 200.0)
         else:
             glOrtho(-10, 10, -10, 10, -20, 20)
             
@@ -290,10 +314,7 @@ class Renderer:
         glMultMatrixf(Mv.T)
         
         renderer.drawGrid()
-
         glEnable(GL_NORMALIZE)
-
-        glColor3ub(255, 255, 0)
 ###########################################################
             
     
@@ -301,7 +322,7 @@ def render():
     global renderer
     renderer.init()
     
-    if (bvh_file.name != ""):
+    if (renderer.get_bvh().name != ""):
         glDisable(GL_LIGHTING)
         renderer.renderBvh()
         
@@ -316,6 +337,10 @@ class GLWidget(QtOpenGL.QGLWidget):
 
     def paintGL(self):
         render()
+
+    def resizeGL(self, width, height):
+        global renderer
+        renderer.set_viewport_size(width, height)
     
 class MainWindow(QtWidgets.QMainWindow):
 
@@ -333,9 +358,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.initGUI()
         
         timer = QtCore.QTimer(self)
-        timer.setInterval(1) # period, in milliseconds
+        timer.setInterval(10) # period, in milliseconds
         timer.timeout.connect(self.glWidget.updateGL)
         timer.start()
+
+        self.frame_timer = QtCore.QTimer(self)
+        self.frame_timer.timeout.connect(self.update_frame)
+
 
     def initGUI(self):
         central_widget = QtWidgets.QWidget()
@@ -359,7 +388,7 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.question(self, 'Error', message, QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.NoButton)
 
     def set_frame_by_input(self):
-        global bvh_file
+        global renderer
         val = self.time_input.text()
         
         if not val.isdigit():
@@ -369,7 +398,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if val < 0:
             self.show_alert("Enter positive number")
             return
-        elif val >= bvh_file.get_frame_num():
+        elif val >= renderer.get_bvh().get_frame_num():
             self.show_alert("Frame number cannot exceed bvh file's frame number")
             return
         self.set_frame(val)
@@ -416,10 +445,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ypos = event.y()
         if renderer.button_left_pressed:
             renderer.change_orbit(xpos, ypos)
+            renderer.set_cur_pos(xpos, ypos)
         elif renderer.button_right_pressed:
             renderer.change_panning(xpos, ypos)
-
-        renderer.set_cur_pos(xpos, ypos)
+            renderer.set_cur_pos(xpos, ypos)
     
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -428,25 +457,34 @@ class MainWindow(QtWidgets.QMainWindow):
             event.ignore()
             
     def dropEvent(self, event):
-        global bvh_file, renderer
+        global renderer
 
         renderer.animating_mode = False
-        bvh_file.joint_num = 0
-        bvh_file.joint_list = []
+        renderer.get_bvh().joint_num = 0
+        renderer.get_bvh().joint_list = []
 
         file_name =  [u.toLocalFile() for u in event.mimeData().urls()][0]
-        bvh_file = BvhFile(file_name)
-        success = bvh_file.parse()
+        renderer.set_bvh(BvhFile(file_name))
+        success = renderer.get_bvh().parse()
         if not success: return
-        self.time_slider.setRange(0, bvh_file.get_frame_num()-1)
+        self.time_slider.setRange(0, renderer.get_bvh().get_frame_num()-1)
+        self.frame_timer.stop()
+        self.frame_timer.setInterval(int(renderer.get_bvh().frame_time * 1000))
+        self.frame_timer.start()
+
+    def update_frame(self):
+        global renderer
+        self.time_slider.setValue(renderer.cur_frame)
+        self.time_input.setText(str(renderer.cur_frame))
+        renderer.show_next_frame()
         
         
         
 ##################################################################
 def main():
-    global renderer, bvh_file
-    renderer = Renderer()
+    global renderer
     bvh_file = BvhFile("")
+    renderer = Renderer(bvh_file)
 
     app = QtWidgets.QApplication(sys.argv)
 
